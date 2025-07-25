@@ -27,6 +27,45 @@ export class SupabaseService {
     }
   }
 
+  // Helper function to format time consistently - ensures HH:MM format
+  private static formatTimeToHHMM(timeString: string): string {
+    if (!timeString) return timeString;
+    
+    // Handle common time formats
+    try {
+      // If it's already in HH:MM format, return as is
+      if (timeString.match(/^\d{1,2}:\d{2}$/)) {
+        const [hours, minutes] = timeString.split(':');
+        const h = parseInt(hours, 10).toString().padStart(2, '0');
+        const m = parseInt(minutes, 10).toString().padStart(2, '0');
+        return `${h}:${m}`;
+      }
+      
+      // If it includes seconds (HH:MM:SS), truncate to HH:MM
+      if (timeString.match(/^\d{1,2}:\d{2}:\d{2}$/)) {
+        const [hours, minutes] = timeString.split(':');
+        const h = parseInt(hours, 10).toString().padStart(2, '0');
+        const m = parseInt(minutes, 10).toString().padStart(2, '0');
+        return `${h}:${m}`;
+      }
+      
+      // If it's a Date object or timestamp, extract time
+      if (timeString.includes('T') || timeString.includes(' ')) {
+        const date = new Date(timeString);
+        if (!isNaN(date.getTime())) {
+          const h = date.getHours().toString().padStart(2, '0');
+          const m = date.getMinutes().toString().padStart(2, '0');
+          return `${h}:${m}`;
+        }
+      }
+      
+      return timeString; // Return original if no pattern matches
+    } catch (error) {
+      console.warn('Time formatting error for:', timeString, error);
+      return timeString; // Return original if parsing fails
+    }
+  }
+
   // Medications
   static async getMedications(userId: string = DEFAULT_USER_ID) {
     try {
@@ -34,10 +73,18 @@ export class SupabaseService {
         .from('medications')
         .select('*')
         .eq('user_id', userId)
+        .neq('is_active', false) // Exclude inactive medications
         .order('created_at', { ascending: false })
       
       if (error) throw error
-      return data || []
+      
+      // Map database fields to frontend format with consistent time formatting
+      const mappedData = (data || []).map(medication => ({
+        ...medication,
+        time: this.formatTimeToHHMM(medication.medication_time) // Map and format 'medication_time' to 'time'
+      }));
+      
+      return mappedData;
     } catch (error) {
       console.error('Error fetching medications:', error)
       throw error
@@ -46,14 +93,32 @@ export class SupabaseService {
 
   static async addMedication(medication: any, userId: string = DEFAULT_USER_ID) {
     try {
+      // Map frontend fields to database fields
+      const medicationData = {
+        ...medication,
+        user_id: userId,
+        medication_time: medication.time, // Map 'time' to 'medication_time'
+      };
+      
+      // Remove the frontend 'time' field to avoid conflicts
+      delete medicationData.time;
+      
       const { data, error } = await supabase
         .from('medications')
-        .insert([{ ...medication, user_id: userId }])
+        .insert([medicationData])
         .select()
         .single()
       
       if (error) throw error
-      return data
+      
+      // Create automatic reminder for this medication
+      await this.createMedicationReminder(data, userId);
+      
+      // Map back to frontend format with consistent time formatting
+      return {
+        ...data,
+        time: this.formatTimeToHHMM(data.medication_time)
+      };
     } catch (error) {
       console.error('Error adding medication:', error)
       throw error
@@ -62,29 +127,140 @@ export class SupabaseService {
 
   static async updateMedication(id: string, medication: any) {
     try {
+      // Map frontend fields to database fields
+      const medicationData = {
+        ...medication,
+        medication_time: medication.time, // Map 'time' to 'medication_time'
+        updated_at: new Date().toISOString()
+      };
+      
+      // Remove the frontend 'time' field to avoid conflicts
+      delete medicationData.time;
+      
       const { data, error } = await supabase
         .from('medications')
-        .update(medication)
+        .update(medicationData)
         .eq('id', id)
         .select()
         .single()
       
       if (error) throw error
-      return data
+      
+      // CRITICAL: Update or create medication reminder with new timing
+      await this.updateMedicationReminder(data);
+      
+      // Map back to frontend format with consistent time formatting
+      return {
+        ...data,
+        time: this.formatTimeToHHMM(data.medication_time)
+      };
     } catch (error) {
       console.error('Error updating medication:', error)
       throw error
     }
   }
 
+  // Helper method to create automatic medication reminder
+  private static async createMedicationReminder(medication: any, userId: string) {
+    try {
+      const reminderData = {
+        user_id: userId,
+        medication_id: medication.id,
+        title: `${medication.name} Reminder`,
+        description: `Time to take your ${medication.dosage} of ${medication.name}`,
+        reminder_time: medication.medication_time,
+        is_recurring: true,
+        days_of_week: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'],
+        reminder_type: 'medication',
+        is_active: medication.is_active !== false
+      };
+
+      const { data, error } = await supabase
+        .from('reminders')
+        .insert([reminderData])
+        .select()
+        .single();
+
+      if (error) {
+        console.warn('Failed to create automatic medication reminder:', error);
+      } else {
+        console.log('Created automatic medication reminder:', data);
+      }
+    } catch (error) {
+      console.warn('Error creating medication reminder:', error);
+    }
+  }
+
+  // Helper method to update medication reminder
+  private static async updateMedicationReminder(medication: any) {
+    try {
+      // Find existing medication reminder
+      const { data: existingReminders, error: findError } = await supabase
+        .from('reminders')
+        .select('*')
+        .eq('medication_id', medication.id)
+        .eq('reminder_type', 'medication');
+
+      if (findError) {
+        console.warn('Error finding existing reminder:', findError);
+        return;
+      }
+
+      if (existingReminders && existingReminders.length > 0) {
+        // Update ALL existing reminders for this medication
+        for (const existingReminder of existingReminders) {
+          const reminderData = {
+            title: `${medication.name} Reminder`,
+            description: `Time to take your ${medication.dosage} of ${medication.name}`,
+            reminder_time: medication.medication_time,
+            is_active: medication.is_active !== false,
+            last_triggered: null, // Reset trigger history when medication is edited
+            snooze_until: null,   // Clear any snooze state when medication is edited
+            updated_at: new Date().toISOString()
+          };
+
+          const { error: updateError } = await supabase
+            .from('reminders')
+            .update(reminderData)
+            .eq('id', existingReminder.id);
+
+          if (updateError) {
+            console.warn('Failed to update medication reminder:', updateError);
+          } else {
+            console.log('Updated medication reminder for:', medication.name, 'with time:', medication.medication_time);
+          }
+        }
+      } else {
+        // Create new reminder if none exists
+        await this.createMedicationReminder(medication, medication.user_id);
+      }
+    } catch (error) {
+      console.warn('Error updating medication reminder:', error);
+    }
+  }
+
   static async deleteMedication(id: string) {
     try {
+      // First, delete all associated reminders for this medication
+      const { error: reminderError } = await supabase
+        .from('reminders')
+        .delete()
+        .eq('medication_id', id);
+
+      if (reminderError) {
+        console.warn('Error deleting medication reminders:', reminderError);
+        // Continue with medication deletion even if reminder deletion fails
+      }
+
+      // Then delete the medication itself
       const { error } = await supabase
         .from('medications')
         .delete()
         .eq('id', id)
       
       if (error) throw error
+      
+      console.log('Successfully deleted medication and associated reminders for ID:', id);
     } catch (error) {
       console.error('Error deleting medication:', error)
       throw error
@@ -98,16 +274,26 @@ export class SupabaseService {
         .from('reminders')
         .select(`
           *,
-          medications (
+          medications!inner (
             name,
-            dosage
+            dosage,
+            is_active
           )
         `)
         .eq('user_id', userId)
+        .eq('medications.is_active', true) // Only get reminders for active medications
         .order('reminder_time', { ascending: true })
       
       if (error) throw error
-      return data || []
+      
+      // Map database fields to frontend format with consistent time formatting
+      const mappedData = (data || []).map(reminder => ({
+        ...reminder,
+        schedule: this.formatTimeToHHMM(reminder.reminder_time), // Map and format 'reminder_time' to 'schedule'
+        medicationId: reminder.medication_id // Map 'medication_id' to 'medicationId'
+      }));
+      
+      return mappedData;
     } catch (error) {
       console.error('Error fetching reminders:', error)
       throw error
@@ -157,6 +343,45 @@ export class SupabaseService {
       if (error) throw error
     } catch (error) {
       console.error('Error deleting reminder:', error)
+      throw error
+    }
+  }
+
+  // Medication Logs
+  static async getMedicationLogs(userId: string = DEFAULT_USER_ID) {
+    try {
+      const { data, error } = await supabase
+        .from('medication_logs')
+        .select(`
+          *,
+          medications (
+            name,
+            dosage
+          )
+        `)
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+      
+      if (error) throw error
+      return data || []
+    } catch (error) {
+      console.error('Error fetching medication logs:', error)
+      throw error
+    }
+  }
+
+  static async addMedicationLog(log: any, userId: string = DEFAULT_USER_ID) {
+    try {
+      const { data, error } = await supabase
+        .from('medication_logs')
+        .insert([{ ...log, user_id: userId }])
+        .select()
+        .single()
+      
+      if (error) throw error
+      return data
+    } catch (error) {
+      console.error('Error adding medication log:', error)
       throw error
     }
   }

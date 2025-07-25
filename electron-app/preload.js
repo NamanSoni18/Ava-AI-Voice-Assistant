@@ -11,6 +11,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
   minimizeWindow: () => ipcRenderer.invoke('window-minimize'),
   maximizeWindow: () => ipcRenderer.invoke('window-maximize'),
   closeWindow: () => ipcRenderer.invoke('window-close'),
+  focusWindow: () => ipcRenderer.invoke('window-focus'),
+  
+  // Notification system
+  requestNotificationPermission: () => ipcRenderer.invoke('request-notification-permission'),
+  showNotification: (options) => ipcRenderer.invoke('show-notification', options),
+  
+  // Listen for notification events
+  onNotificationClicked: (callback) => {
+    ipcRenderer.on('notification-clicked', (event, data) => callback(data))
+    return () => ipcRenderer.removeAllListeners('notification-clicked')
+  },
+  
+  onNotificationAction: (callback) => {
+    ipcRenderer.on('notification-action', (event, data) => callback(data))
+    return () => ipcRenderer.removeAllListeners('notification-action')
+  },
   
   // Platform info
   platform: process.platform,

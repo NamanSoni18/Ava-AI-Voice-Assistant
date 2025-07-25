@@ -219,17 +219,29 @@ class DatabaseService:
         return None
     
     async def delete_medication(self, medication_id: str) -> bool:
-        """Soft delete medication"""
+        """Hard delete medication and associated reminders"""
         if not self.is_connected:
             return False
         
         try:
-            data = {
-                'is_active': False,
-                'updated_at': datetime.now().isoformat()
-            }
-            result = self.client.table('medications').update(data).eq('id', medication_id).execute()
-            return bool(result.data)
+            # First, delete all associated reminders for this medication
+            try:
+                reminder_result = self.client.table('reminders').delete().eq('medication_id', medication_id).execute()
+                logger.info(f"Deleted {len(reminder_result.data) if reminder_result.data else 0} reminders for medication {medication_id}")
+            except Exception as reminder_error:
+                logger.warning(f"Error deleting medication reminders: {reminder_error}")
+                # Continue with medication deletion even if reminder deletion fails
+            
+            # Then hard delete the medication itself
+            result = self.client.table('medications').delete().eq('id', medication_id).execute()
+            success = bool(result.data)
+            
+            if success:
+                logger.info(f"Successfully deleted medication {medication_id} and associated reminders")
+            else:
+                logger.warning(f"No medication found with ID {medication_id}")
+                
+            return success
         except Exception as e:
             logger.error(f"Error deleting medication: {e}")
         return False

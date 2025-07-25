@@ -501,6 +501,24 @@ async def update_medication(medication_id: str, medication: LegacyMedication):
             )
             updated_med = await db_service.update_medication(medication_id, medication_data)
             if updated_med:
+                # CRITICAL: Update associated reminders with new timing
+                try:
+                    # Find and update all reminders for this medication
+                    existing_reminders = await db_service.get_reminders(current_user_id)
+                    for reminder in existing_reminders:
+                        if reminder.medication_id == medication_id:
+                            reminder_update = ReminderUpdate(
+                                title=f"Take {medication.name}",
+                                description=f"Time to take your {medication.dosage} of {medication.name}",
+                                reminder_time=medication.time,
+                                last_triggered=None,  # Reset trigger history when medication is edited
+                                snooze_until=None     # Clear any snooze state when medication is edited
+                            )
+                            await db_service.update_reminder(reminder.id, reminder_update)
+                            logger.info(f"Updated reminder for medication {medication.name} with new time {medication.time}")
+                except Exception as reminder_error:
+                    logger.warning(f"Failed to update medication reminders: {reminder_error}")
+                
                 return APIResponse(
                     success=True,
                     data={"medication": updated_med.dict()},
@@ -750,6 +768,152 @@ async def delete_reminder(reminder_id: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error deleting reminder: {str(e)}")
+
+# Reminder Notification Endpoints
+@app.get("/api/reminders/due", response_model=APIResponse)
+async def get_due_reminders():
+    """Get reminders that are currently due"""
+    try:
+        if db_service.is_connected:
+            now = datetime.now()
+            current_time = now.strftime("%H:%M")
+            current_day = now.strftime("%A")
+            
+            # Get all active reminders
+            all_reminders = await db_service.get_reminders(current_user_id, active_only=True)
+            
+            # Filter for due reminders
+            due_reminders = []
+            for reminder in all_reminders:
+                if is_reminder_due(reminder, current_time, current_day):
+                    due_reminders.append(reminder)
+            
+            return APIResponse(
+                success=True,
+                data={"reminders": due_reminders},
+                message=f"Found {len(due_reminders)} due reminders"
+            )
+        else:
+            return APIResponse(
+                success=False,
+                error="Database not connected"
+            )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting due reminders: {str(e)}")
+
+@app.post("/api/reminders/{reminder_id}/snooze", response_model=APIResponse)
+async def snooze_reminder(reminder_id: str, minutes: int = 5):
+    """Snooze a reminder for specified minutes"""
+    try:
+        if db_service.is_connected:
+            from datetime import timedelta
+            snooze_until = datetime.now() + timedelta(minutes=minutes)
+            
+            reminder_update = ReminderUpdate(snooze_until=snooze_until)
+            updated_reminder = await db_service.update_reminder(reminder_id, reminder_update)
+            
+            if updated_reminder:
+                return APIResponse(
+                    success=True,
+                    data={"reminder": updated_reminder},
+                    message=f"Reminder snoozed for {minutes} minutes"
+                )
+            else:
+                return APIResponse(
+                    success=False,
+                    error="Reminder not found"
+                )
+        else:
+            return APIResponse(
+                success=False,
+                error="Database not connected"
+            )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error snoozing reminder: {str(e)}")
+
+@app.post("/api/reminders/{reminder_id}/complete", response_model=APIResponse)
+async def complete_reminder(reminder_id: str, medication_id: Optional[str] = None):
+    """Mark a reminder as completed for today"""
+    try:
+        if db_service.is_connected:
+            now = datetime.now()
+            
+            # Update reminder last_triggered
+            reminder_update = ReminderUpdate(last_triggered=now)
+            updated_reminder = await db_service.update_reminder(reminder_id, reminder_update)
+            
+            if not updated_reminder:
+                return APIResponse(
+                    success=False,
+                    error="Reminder not found"
+                )
+            
+            # If it's a medication reminder, log it
+            if medication_id:
+                try:
+                    log_data = MedicationLogCreate(
+                        user_id=current_user_id,
+                        medication_id=medication_id,
+                        taken_at=now,
+                        scheduled_time=now.strftime("%H:%M"),
+                        status="taken"
+                    )
+                    
+                    await db_service.add_medication_log(log_data)
+                    logger.info(f"Medication log created for reminder {reminder_id}")
+                except Exception as log_error:
+                    logger.warning(f"Failed to create medication log: {log_error}")
+            
+            return APIResponse(
+                success=True,
+                data={"reminder": updated_reminder},
+                message="Reminder marked as completed"
+            )
+        else:
+            return APIResponse(
+                success=False,
+                error="Database not connected"
+            )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error completing reminder: {str(e)}")
+
+def is_reminder_due(reminder: Reminder, current_time: str, current_day: str) -> bool:
+    """Check if a reminder is due based on time and frequency"""
+    
+    # Check if reminder is active
+    if not reminder.is_active:
+        return False
+    
+    # Check if reminder is snoozed
+    if reminder.snooze_until:
+        if reminder.snooze_until > datetime.now():
+            return False
+    
+    # Check if time matches (allowing for 1-minute tolerance)
+    try:
+        reminder_hour, reminder_minute = map(int, reminder.reminder_time.split(':'))
+        current_hour, current_minute = map(int, current_time.split(':'))
+        
+        # Allow 1-minute tolerance
+        time_diff = abs((current_hour * 60 + current_minute) - (reminder_hour * 60 + reminder_minute))
+        if time_diff > 1:
+            return False
+    except (ValueError, AttributeError):
+        return False
+    
+    # For recurring reminders, check days of week
+    if reminder.is_recurring and reminder.days_of_week:
+        if current_day not in reminder.days_of_week:
+            return False
+    
+    # Check if already triggered today (prevent duplicate notifications)
+    if reminder.last_triggered:
+        last_triggered_date = reminder.last_triggered.date()
+        today = datetime.now().date()
+        if last_triggered_date == today:
+            return False
+    
+    return True
         
 @app.get("/api/emergency-contacts", response_model=APIResponse)
 async def get_emergency_contacts():

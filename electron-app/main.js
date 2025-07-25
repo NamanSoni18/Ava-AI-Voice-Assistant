@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, Notification } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -108,6 +108,90 @@ class ElectronApp {
     ipcMain.handle('window-close', () => {
       if (this.mainWindow) {
         this.mainWindow.close()
+      }
+    })
+
+    // Handle window focus
+    ipcMain.handle('window-focus', () => {
+      if (this.mainWindow) {
+        if (this.mainWindow.isMinimized()) {
+          this.mainWindow.restore()
+        }
+        this.mainWindow.focus()
+        this.mainWindow.show()
+      }
+    })
+
+    // Handle notification permission request
+    ipcMain.handle('request-notification-permission', async () => {
+      try {
+        // On Windows and Linux, notifications are allowed by default
+        return { success: true, permission: 'granted' }
+      } catch (error) {
+        console.error('Error requesting notification permission:', error)
+        return { success: false, error: error.message }
+      }
+    })
+
+    // Handle showing notifications
+    ipcMain.handle('show-notification', (event, options) => {
+      try {
+        if (!Notification.isSupported()) {
+          console.warn('Notifications are not supported on this system')
+          return { success: false, error: 'Notifications not supported' }
+        }
+
+        const notification = new Notification({
+          title: options.title,
+          body: options.body,
+          icon: options.icon ? path.join(__dirname, 'public', options.icon.replace('/', '')) : undefined,
+          silent: options.silent || false,
+          urgency: options.urgent ? 'critical' : 'normal',
+          timeoutType: options.timeoutType || 'default',
+          closeButtonText: options.closeButtonText || 'Close'
+        })
+
+        // Handle notification click
+        notification.on('click', () => {
+          console.log('Notification clicked')
+          // Focus the main window
+          if (this.mainWindow) {
+            if (this.mainWindow.isMinimized()) {
+              this.mainWindow.restore()
+            }
+            this.mainWindow.focus()
+            this.mainWindow.show()
+          }
+          
+          // Send click event to renderer
+          if (this.mainWindow && this.mainWindow.webContents) {
+            this.mainWindow.webContents.send('notification-clicked', options)
+          }
+        })
+
+        // Handle notification close
+        notification.on('close', () => {
+          console.log('Notification closed')
+        })
+
+        // Handle notification actions (if supported)
+        notification.on('action', (event, index) => {
+          console.log('Notification action clicked:', index)
+          if (this.mainWindow && this.mainWindow.webContents) {
+            this.mainWindow.webContents.send('notification-action', {
+              action: options.actions ? options.actions[index] : null,
+              options
+            })
+          }
+        })
+
+        notification.show()
+        console.log('Notification shown:', options.title)
+        
+        return { success: true }
+      } catch (error) {
+        console.error('Error showing notification:', error)
+        return { success: false, error: error.message }
       }
     })
   }

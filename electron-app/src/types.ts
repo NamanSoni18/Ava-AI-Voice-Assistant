@@ -215,7 +215,26 @@ export interface ElectronAPI {
   minimizeWindow: () => Promise<void>;
   maximizeWindow: () => Promise<void>;
   closeWindow: () => Promise<void>;
+  focusWindow: () => Promise<void>;
+  requestNotificationPermission: () => Promise<{ success: boolean; permission?: string; error?: string }>;
+  showNotification: (options: ElectronNotificationOptions) => Promise<{ success: boolean; error?: string }>;
+  onNotificationClicked: (callback: (data: any) => void) => () => void;
+  onNotificationAction: (callback: (data: any) => void) => () => void;
   platform: string;
+}
+
+export interface ElectronNotificationOptions {
+  title: string;
+  body: string;
+  icon?: string;
+  silent?: boolean;
+  urgent?: boolean;
+  timeoutType?: 'default' | 'never';
+  closeButtonText?: string;
+  actions?: Array<{
+    action: string;
+    title: string;
+  }>;
 }
 
 export interface Versions {

@@ -136,6 +136,7 @@ class ReminderUpdate(BaseModel):
     reminder_type: Optional[str] = None
     is_active: Optional[bool] = None
     snooze_until: Optional[datetime] = None
+    last_triggered: Optional[datetime] = None
 
 # Emergency Contact Models
 class EmergencyContact(BaseEntity):

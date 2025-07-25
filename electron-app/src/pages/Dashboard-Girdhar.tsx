@@ -15,6 +15,7 @@ import {
   Stethoscope,
   Bell,
   BellOff,
+  Settings,
 } from 'lucide-react';
 import { apiService } from '../services/api';
 import {
@@ -46,6 +47,8 @@ import VoiceInterface from '../components/VoiceInterface';
 import StatusIndicator from '../components/StatusIndicator';
 import Header from '../components/Header';
 import { useNotification } from '../components/NotificationProvider';
+import { useReminderNotifications } from '../hooks/useReminderNotifications';
+import NotificationTest from '../components/NotificationTest';
 
 const Dashboard: React.FC = () => {
   const { addNotification } = useNotification();
@@ -66,12 +69,20 @@ const Dashboard: React.FC = () => {
     healthTips: [],
   });
 
-  const [activeTab, setActiveTab] = useState<'medications' | 'health' | 'chat'>('chat');
+  const [activeTab, setActiveTab] = useState<'medications' | 'health' | 'chat' | 'settings'>('chat');
+  const [showAllReminders, setShowAllReminders] = useState(false);
+  
+  // Get current time in HH:MM format
+  const getCurrentTime = () => {
+    const now = new Date();
+    return now.getHours().toString().padStart(2, '0') + ':' + now.getMinutes().toString().padStart(2, '0');
+  };
+
   const [newMedication, setNewMedication] = useState<Omit<Medication, 'id'>>({
     name: '',
     dosage: '',
     frequency: 'Once daily',
-    time: '08:00',
+    time: getCurrentTime(),
   });
   const [symptomCheck, setSymptomCheck] = useState<SymptomCheckRequest>({
     symptoms: '',
@@ -91,6 +102,12 @@ const Dashboard: React.FC = () => {
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const isProcessingRef = useRef<boolean>(false);
+
+  // Initialize reminder notifications (always active)
+  const { forceCheckReminders } = useReminderNotifications({
+    userId: '00000000-0000-0000-0000-000000000001',
+    showInAppNotifications: true
+  });
 
   // Load data function
   const loadData = useCallback(async () => {
@@ -442,14 +459,14 @@ const Dashboard: React.FC = () => {
   // Function to close modal and reset editing state
   const closeMedicationModal = useCallback(() => {
     setEditingMedicationId(null);
-    setNewMedication({ name: '', dosage: '', frequency: 'Once daily', time: '08:00' });
+    setNewMedication({ name: '', dosage: '', frequency: 'Once daily', time: getCurrentTime() });
     (document.getElementById('add-medication-modal') as HTMLDialogElement)?.close();
   }, []);
 
   // Function to open add medication modal
   const openAddMedicationModal = useCallback(() => {
     setEditingMedicationId(null);
-    setNewMedication({ name: '', dosage: '', frequency: 'Once daily', time: '08:00' });
+    setNewMedication({ name: '', dosage: '', frequency: 'Once daily', time: getCurrentTime() });
     (document.getElementById('add-medication-modal') as HTMLDialogElement)?.showModal();
   }, []);
 
@@ -474,6 +491,15 @@ const Dashboard: React.FC = () => {
           title: 'Medication Updated',
           message: `${updatedMedication.name} has been updated successfully.`
         });
+        
+        // Force check reminders after medication update to trigger immediate notifications
+        try {
+          await forceCheckReminders();
+          console.log('Forced reminder check after medication update');
+        } catch (error) {
+          console.warn('Failed to force check reminders:', error);
+        }
+        
         setEditingMedicationId(null);
       } else {
         // Add new medication
@@ -488,9 +514,17 @@ const Dashboard: React.FC = () => {
           title: 'Medication Added',
           message: `${medication.name} has been added to your medication list.`
         });
+        
+        // Force check reminders after adding new medication
+        try {
+          await forceCheckReminders();
+          console.log('Forced reminder check after medication addition');
+        } catch (error) {
+          console.warn('Failed to force check reminders:', error);
+        }
       }
 
-      setNewMedication({ name: '', dosage: '', frequency: 'Once daily', time: '08:00' });
+      setNewMedication({ name: '', dosage: '', frequency: 'Once daily', time: getCurrentTime() });
       closeMedicationModal();
 
       // Refresh data to get updated reminders
@@ -514,7 +548,7 @@ const Dashboard: React.FC = () => {
         addMessage('Failed to save medication. Please try again.', false);
       }
     }
-  }, [newMedication, editingMedicationId, addMessage, loadData, closeMedicationModal, addNotification]);
+  }, [newMedication, editingMedicationId, addMessage, loadData, closeMedicationModal, addNotification, forceCheckReminders]);
 
   const getNextMedication = useCallback(() => {
     const now = new Date();
@@ -803,6 +837,13 @@ const Dashboard: React.FC = () => {
           >
             <HeartPulse size={20} />
           </button>
+          <button
+            onClick={() => setActiveTab('settings')}
+            className={`p-3 rounded-lg transition-all ${activeTab === 'settings' ? 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-slate-800'}`}
+            title="Notification Settings"
+          >
+            <Settings size={20} />
+          </button>
         </nav>
 
         {/* Medications Panel */}
@@ -891,7 +932,7 @@ const Dashboard: React.FC = () => {
                 </h3>
                 {appState.reminders.length > 0 ? (
                   <div className="space-y-3">
-                    {appState.reminders.slice(0, 3).map((reminder: ReminderResponse) => {
+                    {(showAllReminders ? appState.reminders : appState.reminders.slice(0, 3)).map((reminder: ReminderResponse) => {
                       const medication = appState.medications.find(
                         med => med.id === reminder.medicationId
                       );
@@ -901,7 +942,7 @@ const Dashboard: React.FC = () => {
                           className="bg-yellow-50 dark:bg-yellow-900/20 px-4 py-3 rounded-lg border border-yellow-200 dark:border-yellow-800/50"
                         >
                           <p className="text-yellow-700 dark:text-yellow-300 font-medium">
-                            {reminder.title} at {reminder.schedule}
+                            {reminder.title} at {reminder.schedule || (reminder as any).reminder_time || 'No time set'}
                           </p>
                           {medication && (
                             <p className="text-yellow-600 dark:text-yellow-400 text-sm mt-1">
@@ -917,9 +958,16 @@ const Dashboard: React.FC = () => {
                       );
                     })}
                     {appState.reminders.length > 3 && (
-                      <p className="text-gray-500 dark:text-gray-400 text-sm text-center">
-                        +{appState.reminders.length - 3} more reminders
-                      </p>
+                      <button
+                        onClick={() => setShowAllReminders(!showAllReminders)}
+                        className="w-full text-gray-500 dark:text-gray-400 text-sm text-center py-2 hover:text-gray-700 dark:hover:text-gray-300 transition-colors duration-200 border border-dashed border-gray-300 dark:border-gray-600 rounded-lg hover:border-gray-400 dark:hover:border-gray-500"
+                      >
+                        {showAllReminders ? (
+                          <>Show less reminders</>
+                        ) : (
+                          <>+{appState.reminders.length - 3} more reminders (click to view)</>
+                        )}
+                      </button>
                     )}
                   </div>
                 ) : (
@@ -1068,6 +1116,35 @@ const Dashboard: React.FC = () => {
                     </motion.li>
                   ))}
                 </ul>
+              </div>
+            </motion.section>
+          )}
+        </AnimatePresence>
+
+        {/* Settings Panel */}
+        <AnimatePresence>
+          {activeTab === 'settings' && (
+            <motion.section
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              transition={{ duration: 0.2 }}
+              className="flex-1 flex flex-col p-6 overflow-y-auto"
+            >
+              <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100 mb-6 flex items-center gap-3">
+                <Settings className="w-6 h-6 text-gray-600 dark:text-gray-400" />
+                Notification Settings
+              </h2>
+              <div className="space-y-6">
+                <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-lg border border-green-200 dark:border-green-800">
+                  <h3 className="text-lg font-semibold text-green-800 dark:text-green-200 mb-2">
+                    Reminder Notifications
+                  </h3>
+                  <p className="text-green-700 dark:text-green-300">
+                    ✅ Notifications are always active and monitoring for medication reminders.
+                  </p>
+                </div>
+                <NotificationTest />
               </div>
             </motion.section>
           )}

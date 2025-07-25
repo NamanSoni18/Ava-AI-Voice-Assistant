@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Settings, X, Volume2, VolumeX, Palette, Info, Mic } from 'lucide-react';
+import { Settings, X, Volume2, VolumeX, Palette, Info, Mic, Bug } from 'lucide-react';
+import ReminderDebug from './ReminderDebug';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -19,11 +20,12 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
   onToggleMute,
   onToggleDarkMode
 }) => {
-  const [activeTab, setActiveTab] = useState<'audio' | 'appearance' | 'about'>('audio');
+  const [activeTab, setActiveTab] = useState<'audio' | 'appearance' | 'about' | 'debug'>('audio');
 
   const tabs = [
     { id: 'audio' as const, label: 'Audio', icon: Volume2 },
     { id: 'appearance' as const, label: 'Appearance', icon: Palette },
+    { id: 'debug' as const, label: 'Debug', icon: Bug },
     { id: 'about' as const, label: 'About', icon: Info }
   ];
 
@@ -217,6 +219,23 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
                         <div className="w-8 h-8 bg-indigo-500 rounded-full"></div>
                       </div>
                     </div>
+                  </motion.div>
+                )}
+
+                {activeTab === 'debug' && (
+                  <motion.div
+                    key="debug"
+                    initial={{ opacity: 0, x: 20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    exit={{ opacity: 0, x: -20 }}
+                    transition={{ duration: 0.2 }}
+                    className="space-y-4"
+                  >
+                    <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-4">
+                      Reminder Debug Tools
+                    </h3>
+                    
+                    <ReminderDebug />
                   </motion.div>
                 )}
 
