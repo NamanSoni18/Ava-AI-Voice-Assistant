@@ -10,7 +10,7 @@ env_path = Path(__file__).parent / '.env'
 load_dotenv(env_path)
 
 class Config:
-    """Application configuration"""
+    """Application configurationions for Ava AI Voice Assistant"""
     
     # Database Configuration
     SUPABASE_URL = os.getenv("SUPABASE_URL", "")
